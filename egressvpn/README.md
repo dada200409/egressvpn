@@ -1,6 +1,6 @@
 # egressvpn
 
-> 一份 YAML → 一整套 strongSwan IKEv2 + nftables 出口部署：员工用账号密码接入，流量按账号从 A 自己的网络出口，或链式经 B 从 B 的网络出口。
+> 一份 YAML → 一整套 strongSwan IKEv2 + nftables 出口部署：用账号密码接入，流量按账号从 A 自己的网络出口，或链式经 B 从 B 的网络出口。
 >
 > Renders a complete strongSwan IKEv2 / nftables egress deployment from one YAML table. Two egress faces per host, per-account routing, chained exit through a second server, and the second server's credential never reaches an employee.
 

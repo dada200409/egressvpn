@@ -1,0 +1,102 @@
+# egressvpn 配置表（YAML 子集：嵌套映射、块列表、标量；不支持 flow 写法 { } [ ]、
+# 锚点 &/*、折叠标量 |/>,缩进必须是空格。认不出的写法会报错而不是猜。）
+
+server:
+  # what the Macs dial
+  public-host: vpn.example.com
+  # the NIC client ESP packets arrive on; each face gets an XFRM interface (xv<face>)
+  # hung off it, which is what keeps a 0/0 tunnel from re-encrypting this host's own
+  # forwarded traffic. Defaults to the first egress=local face's out-interface.
+  inbound-interface: eth0
+  # must match the server certificate's SAN, and must be the RemoteIdentifier
+  # the client profile sends
+  identity: vpn.example.com
+  cert-file: /etc/swanctl/x509/vpn.example.com.pem
+  key-file: /etc/swanctl/private/vpn.example.com-key.pem
+  ca-file: /etc/swanctl/x509ca/ca.pem
+  # must be the CA's subject CN; the client uses it to pin the issuer
+  ca-common-name: Example Root CA
+  dns:
+    - 1.1.1.1
+    - 8.8.8.8
+  # reachable without going to the public internet
+  lan:
+    - 192.168.10.0/24
+
+client:
+  display-name: Corp VPN
+  organization: Example Inc
+  # defaults to server.public-host; set this when clients dial a NAT/PAD
+  # address that differs from the certificate identity
+  remote-address: vpn.example.com
+  # pre-fills the EAP identity so the user types only the password
+  prefill-username: true
+  # DANGEROUS: bakes the account password into the .mobileconfig file.
+  # Leave false unless the profile is delivered over MDM with encryption.
+  embed-password: false
+  send-local-identifier: false
+
+tuning:
+  # hop 2 (the link to B, whatever carries it): a plain internet path, ~100 bytes
+  # of encapsulation off a 1480-byte ESP payload
+  mtu: 1380
+  # hop 1 (the IKE tunnel): macOS brings its IKEv2 interface up at 1280 and
+  # ignores anything larger, so the server's xfrm device matches that. Raising
+  # it does not raise the client's - the client then drops every big packet.
+  tunnel-mtu: 1280
+  # must be <= tunnel-mtu - 40. nftables rewrites the advertised MSS
+  # unconditionally, so a bigger value would RAISE it and black-hole bulk
+  # traffic: a 1340 clamp against a 1280-byte ipsec0 lost every packet over
+  # 1280 bytes on the live box.
+  mss-clamp: 1240
+  ike-proposals: aes256-sha256-modp2048
+  esp-proposals: aes256-sha256-modp2048
+  dpd-delay: 30s
+  rekey-time: 14400s
+  wg-port: 51820
+  wg-keepalive: 25
+
+# an egress face is a route: each gets its own client IP pool, which is how
+# nftables and policy routing tell the two paths apart
+faces:
+  - name: local
+    egress: local
+    pool: 10.90.1.0/24
+    out-interface: eth0
+  - name: via-b
+    egress: relay
+    pool: 10.90.2.0/24
+    upstream: b
+
+upstreams:
+  - name: b
+    interface: wgb
+    # how hop 2 is carried: wireguard (default, needs bidirectional UDP between
+    # A and B) or tcp-ssh (ssh -w over the ssh port, for hosting providers that
+    # drop UDP one way - see README "B 上的准备"). The interface name, the nft
+    # rules and table 100 are identical either way.
+    transport: wireguard
+    endpoint: 203.0.113.20:51820   # tcp-ssh: host:22 instead
+    local-ip: 10.91.0.2/32
+    remote-ip: 10.91.0.1/32
+    # B's public key: egressvpn genkey on B. wireguard only; tcp-ssh rejects it,
+    # since ssh encrypts the link itself.
+    remote-public-key: CHANGE_ME_run_genkey_on_B
+    # A's own private key, 0600, never in this file. wg key for wireguard, ssh
+    # key (with its .pub sibling, needed to build B's authorized_keys) for tcp-ssh.
+    private-key-file: /etc/egressvpn/wgb.key
+    psk-file: /etc/egressvpn/wgb.psk
+    # tcp-ssh only:
+    # ssh-user: root
+    # tunnel-index: 10
+
+users:
+  - name: alice
+    face: local
+    password-ref: /etc/egressvpn/users/alice
+  - name: bob
+    face: via-b
+    password-ref: /etc/egressvpn/users/bob
+  - name: carol
+    face: via-b
+    password-ref: env:CAROL_EAP_PASSWORD
